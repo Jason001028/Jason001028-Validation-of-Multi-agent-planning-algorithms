@@ -127,24 +127,6 @@ while 1
                 target = agents(i).pos + escape_direction * escape_distance;
                 target = checkBounds(target, L);
                 
-                % 如果目标点太接近边界，尝试其他方向
-                if any(target < 0.1) || any(target > 0.9)
-                    alternative_directions = [
-                        escape_direction(2), -escape_direction(1);  % 逆时针90度
-                        -escape_direction(2), escape_direction(1);  % 顺时针90度
-                        -escape_direction(1), -escape_direction(2)  % 180度
-                    ];
-                    
-                    for j = 1:size(alternative_directions, 1)
-                        alt_target = agents(i).pos + alternative_directions(j,:) * escape_distance;
-                        alt_target = checkBounds(alt_target, L);
-                        if all(alt_target >= 0.1) && all(alt_target <= 0.9)
-                            target = alt_target;
-                            break;
-                        end
-                    end
-                end
-                
                 % 将连续坐标转换为网格坐标
                 start = continuousToGrid(agents(i).pos, grid_size);
                 goal = continuousToGrid(target, grid_size);
@@ -230,7 +212,7 @@ function path = astar(grid, start, goal)
             return;
         end
         
-        current_g = openSet(current_idx, 3);  % 存储当前节点的 g 值
+        current_g = openSet(current_idx, 3);
         openSet(current_idx,:) = [];
         closedSet(current(1), current(2)) = 1;
         
@@ -242,7 +224,7 @@ function path = astar(grid, start, goal)
                 continue;
             end
             
-            tentative_g = current_g + 1;  % 使用存储的 g 值
+            tentative_g = current_g + 1;
             
             neighbor_idx = find(openSet(:,1) == neighbor(1) & openSet(:,2) == neighbor(2));
             if isempty(neighbor_idx)
@@ -281,9 +263,6 @@ function path = reconstructPath(cameFrom, current)
 end
 
 function pos = checkBounds(pos, L)
-    if numel(pos) < 2
-        error('Position must be a 2-element vector.');
-    end
-    pos(1) = max(min(pos(1), L), 0); % 检查x坐标
-    pos(2) = max(min(pos(2), L), 0); % 检查y坐标
+    pos(1) = max(0, min(pos(1), L));
+    pos(2) = max(0, min(pos(2), L));
 end
