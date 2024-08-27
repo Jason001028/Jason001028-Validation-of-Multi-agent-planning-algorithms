@@ -1,21 +1,21 @@
 clear all
 close all
 health = 100; % 初始血量
-health_depletion_rate = 10; % 每秒损失的血量
+health_depletion_rate = 8; % 每秒损失的血量
 pursuers_num = 5;
 evaders_num = 1;
 agents_sum = pursuers_num + evaders_num;
 t_step = 0.01;
 capture_dis = 0.05;
 counter = 0;
-L = 1; % 边长为1的正方形
+L = 10; % 边长为L的正方形
 square_x = [0 0 L L 0]; % 5个顶点的坐标,第一个和最后一个重合才能形成封闭图形
 square_y = [0 L L 0 0];
 % 最大速度
-max_speed = 2; % 设置最大速度
+max_speed = 2.5; % 设置最大速度
 % 初始化智能体参数
 for i = 1:agents_sum
-    agents(i).pos = rand(1,2);
+    agents(i).pos = rand(1,2)*L;
     agents(i).active = 1; % evader 存活flag
     agents(i).min_dis = 100;
     agents(i).distance = 0;
@@ -42,7 +42,7 @@ R = 0.1;                  % 控制输入权重
 
 % 虚拟质点参数
 num_virtual_points = pursuers_num;  % 虚拟质点数量等于追捕者数量
-virtual_point_radius = 0.15;  % 虚拟质点分布半径
+virtual_point_radius = 0.75;  % 虚拟质点分布半径
 
 figure()
 while 1
@@ -113,78 +113,90 @@ while 1
         Hpl = text(temp_pos(:,1), temp_pos(:,2), plabels, ...
               'HorizontalAlignment','left', ...
               'BackgroundColor', 'none');
-        xlim([0 1]);
-        ylim([0 1]);
+        xlim([0 L]);
+        ylim([0 L]);
 
         % 追捕者的 MPC 控制
-        max_speed_pursuer = 0.8; % 略微增加最大速度
+        max_speed_pursuer = 1.2; % 略微增加最大速度
         for i = 1:pursuers_num
             assigned_point_index = find(assignments(i, :));
             if ~isempty(assigned_point_index)
                 target_point = virtual_points(assigned_point_index, :);
-                
-                % 计算人工势场力
-                F_rep = [0, 0];
-                for j = 1:pursuers_num
-                    if i ~= j
-                        diff = calculateDistance(agents(i).pos, agents(j).pos, L);
-                        dist = norm(diff);
-                        if dist < rep_range
-                            F_rep = F_rep + k_rep * (1/dist - 1/rep_range) * (1/dist^2) * (diff / dist);
-                        end
+            else
+                % 如果没有分配到虚拟质点，直接追踪最近的逃避者
+                evader_positions = [agents(pursuers_num+1:end).pos];
+                distances = vecnorm(agents(i).pos - evader_positions, 2, 2);
+                [~, nearest_evader] = min(distances);
+                target_point = agents(pursuers_num + nearest_evader).pos;
+            end
+            
+            % 计算人工势场力
+            F_rep = [0, 0];
+            for j = 1:pursuers_num
+                if i ~= j
+                    diff = calculateDistance(agents(i).pos, agents(j).pos, L);
+                    dist = norm(diff);
+                    if dist < rep_range
+                        F_rep = F_rep + k_rep * (1/dist - 1/rep_range) * (1/dist^2) * (diff / dist);
                     end
                 end
-                
-                % 结合MPC和APF
-                [optimal_control, predicted_trajectory] = mpcControlWithAPF(agents(i).pos, target_point, F_rep, prediction_horizon, control_horizon, Q, R, max_speed_pursuer);
-                
-                % 保存旧位置
-                old_pos = agents(i).pos;
-                
-                % 更新追捕者位置
-                agents(i).pos = agents(i).pos + t_step * optimal_control(1:2);
-                agents(i).pos = checkBounds(agents(i).pos, L);
-                
-                % 更新移动距离
-                agents(i).distance = agents(i).distance + norm(agents(i).pos - old_pos);
-                
-                % 绘制追捕者到分配的虚拟质点的连接线
-                line([agents(i).pos(1), target_point(1)], [agents(i).pos(2), target_point(2)], 'Color', 'k', 'LineStyle', ':');
-            else
-                warning('Pursuer %d has no assigned virtual point', i);
             end
+            
+            % 结合MPC和APF
+            [optimal_control, predicted_trajectory] = mpcControlWithAPF(agents(i).pos, target_point, F_rep, prediction_horizon, control_horizon, Q, R, max_speed_pursuer);
+            
+            % 保存旧位置
+            old_pos = agents(i).pos;
+            
+            % 更新追捕者位置
+            agents(i).pos = agents(i).pos + t_step * optimal_control(1:2);
+            agents(i).pos = checkBounds(agents(i).pos, L);
+            
+            % 更新移动距离
+            agents(i).distance = agents(i).distance + norm(agents(i).pos - old_pos);
+            
+            % 绘制追捕者到目标点的连接线
+            line([agents(i).pos(1), target_point(1)], [agents(i).pos(2), target_point(2)], 'Color', 'k', 'LineStyle', ':');
         end
 
-        % 更新逃避者位置
+        % 在主循环外部初始化逃逸者的目标点和当前方向
+        for i = (pursuers_num+1):agents_sum
+            agents(i).target = rand(1, 2) * L;
+            agents(i).direction = (agents(i).target - agents(i).pos) / norm(agents(i).target - agents(i).pos);
+        end
+
         for i = (pursuers_num+1):agents_sum
             if agents(i).active
+                % 计算到目标点的距离
+                dist_to_target = norm(agents(i).target - agents(i).pos);
+                
+                % 如果接近目标点，选择新的目标点
+                if dist_to_target < 0.5
+                    agents(i).target = rand(1, 2) * L;
+                    agents(i).direction = (agents(i).target - agents(i).pos) / norm(agents(i).target - agents(i).pos);
+                end
+                
                 % 计算墙壁斥力
                 F_wall = calculateWallRepulsion(agents(i).pos, L, k_wall, wall_range);
                 
-                % 生成随机运动方向
-                random_direction = rand(1, 2) - 0.5;
-                random_direction = random_direction / norm(random_direction);
+                % 更新方向，考虑当前方向、目标方向和墙壁斥力
+                target_direction = (agents(i).target - agents(i).pos) / norm(agents(i).target - agents(i).pos);
+                new_direction = 0.7 * agents(i).direction + 0.2 * target_direction + 0.1 * F_wall;
+                new_direction = new_direction / norm(new_direction);
                 
-                % 合并墙壁斥力和随机运动
-                movement_direction = F_wall + random_direction;
+                % 平滑过渡到新方向
+                agents(i).direction = 2 * agents(i).direction + 0.8 * new_direction;
+                agents(i).direction = agents(i).direction / norm(agents(i).direction);
                 
-                % 归一化方向向量
-                if norm(movement_direction) > 0
-                    movement_direction = movement_direction / norm(movement_direction);
-                else
-                    movement_direction = random_direction;
-                end
-                
-                % 更新速度（使用最大速度）
-                agents(i).velocity = movement_direction * max_speed;
-                
-                % 更新位置
+                % 更新速度和位置
+                agents(i).velocity = agents(i).direction * max_speed;
                 new_pos = agents(i).pos + t_step * agents(i).velocity;
                 agents(i).pos = checkBounds(new_pos, L);
                 
-                % 如果位置被边界限制，调整速度
+                % 如果位置被边界限制，调整方向
                 if any(agents(i).pos ~= new_pos)
-                    agents(i).velocity = (agents(i).pos - agents(i).pos) / t_step;
+                    agents(i).direction = agents(i).direction - 2 * dot(agents(i).direction, F_wall) * F_wall;
+                    agents(i).direction = agents(i).direction / norm(agents(i).direction);
                 end
             end
         end
