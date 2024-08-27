@@ -2,19 +2,19 @@ clear all
 close all
 
 pursuers_num = 3;
-evaders_num = 6;
+evaders_num = 1;
 agents_sum = pursuers_num + evaders_num;
 t_step = 0.01;
 capture_dis = 0.05;
 counter = 0;
-L = 1; % 边长为1的正方形
+L = 9; % 边长为3的正方形
 square_x = [0 0 L L 0]; % 5个顶点的坐标,第一个和最后一个重合才能形成封闭图形
 square_y = [0 L L 0 0];
 % 最大速度
 max_speed = 0.25; % 设置最大速度
 % 初始化智能体参数
 for i = 1:agents_sum
-    agents(i).pos = rand(1,2);
+    agents(i).pos = rand(1,2) * L; % 修改初始位置范围
     agents(i).active = 1; % evader 存活flag
     agents(i).min_dis = 100;
     agents(i).distance = 0;
@@ -32,6 +32,16 @@ cooperation_range = 0.3 ; % 协作范围
 prediction_factor = 1; % 预测因子
 noise_amplitude = 2; % 添加噪声幅度
 inertia = 0.9; % 添加惯性因子
+vision_range = 1.5; % 视野范围
+
+% 初始化迷雾
+fog_resolution = 0.1;
+fog_grid = zeros(ceil(L/fog_resolution), ceil(L/fog_resolution));  % 初始化为全黑（0）
+
+% 在主循环开始之前，为每个围捕者清除初始视野范围内的迷雾
+for i = 1:pursuers_num
+    fog_grid = clearFog(agents(i).pos, vision_range, fog_grid, fog_resolution, L);
+end
 
 figure()
 while 1
@@ -74,20 +84,37 @@ while 1
         disp(['Total distance traveled by all pursuers: ', num2str(total_distance_pursuers)]);
         return;
     else
+        % 清除当前视野内的迷雾（仅对围捕者）
+        for i = 1:pursuers_num
+            if agents(i).active
+                fog_grid = clearFog(agents(i).pos, vision_range, fog_grid, fog_resolution, L);
+            end
+        end
+        
+        % 绘制地图和迷雾
+        imagesc([0 L], [0 L], fog_grid');
+        colormap([0 0 0; 1 1 1]);  % 黑色为未探索区域，白色为已探索区域
+        hold on;
         
         % 画pursuer和evader的位置
         temp_pos = reshape([agents.pos], 2, agents_sum)';
         plot(temp_pos(1:pursuers_num,1), temp_pos(1:pursuers_num,2), 'go', ...
              temp_pos(pursuers_num+1:end,1), temp_pos(pursuers_num+1:end,2), 'r*');
         
+        % 画视野范围
+        for i = 1:agents_sum
+            if agents(i).active
+                viscircles(agents(i).pos, vision_range, 'Color', 'b', 'LineStyle', ':');
+            end
+        end
+        
         % 打label
         plabels = arrayfun(@(n) {sprintf('X%d', n)}, (1:agents_sum)');
-        hold on
         Hpl = text(temp_pos(:,1), temp_pos(:,2), plabels, ...
               'HorizontalAlignment','left', ...
               'BackgroundColor', 'none');
-        xlim([0 1]);
-        ylim([0 1]);
+        xlim([0 L]);
+        ylim([0 L]);
        
         % 初始化 last_direction
         if ~isfield(agents, 'last_direction')
@@ -106,28 +133,30 @@ while 1
             nearest_evader_pos = [0, 0];
             nearest_evader_vel = [0, 0];
             
-            % 目标选择：找到最近的未被捕获且未被其他追捕者盯上的逃避者
+            % 目标选择：找到视野范围内最近的未被捕获且未被其他追捕者盯上的逃避者
             for j = (pursuers_num+1):agents_sum
-                if agents(j).active  % 只考虑未被捕获的逃避者
+                if agents(j).active
                     diff = calculateDistance(agents(j).pos, agents(i).pos, L);
                     dist = norm(diff);
-                    is_targeted = false;
-                    for k = 1:pursuers_num
-                        if k ~= i
-                            diff_k = calculateDistance(agents(k).pos, agents(j).pos, L);
-                            if norm(diff_k) < dist
-                                is_targeted = true;
-                                break;
+                    if dist <= vision_range  % 只考虑视野范围内的逃避者
+                        is_targeted = false;
+                        for k = 1:pursuers_num
+                            if k ~= i
+                                diff_k = calculateDistance(agents(k).pos, agents(j).pos, L);
+                                if norm(diff_k) < dist
+                                    is_targeted = true;
+                                    break;
+                                end
                             end
                         end
-                    end
-                    if ~is_targeted && dist < nearest_evader_dist
-                        nearest_evader_dist = dist;
-                        nearest_evader_pos = agents(j).pos;
-                        if isfield(agents(j), 'velocity')
-                            nearest_evader_vel = agents(j).velocity;
-                        else
-                            nearest_evader_vel = [0, 0];
+                        if ~is_targeted && dist < nearest_evader_dist
+                            nearest_evader_dist = dist;
+                            nearest_evader_pos = agents(j).pos;
+                            if isfield(agents(j), 'velocity')
+                                nearest_evader_vel = agents(j).velocity;
+                            else
+                                nearest_evader_vel = [0, 0];
+                            end
                         end
                     end
                 end
@@ -232,12 +261,14 @@ while 1
                     agents(i).velocity = agents(i).velocity(:)'; % 确保是行向量
                 end
                 
-                % 计算逃避方向
+                % 计算逃避方向（只考虑视野范围内的追捕者）
                 escape_direction = [0, 0];
                 for j = 1:pursuers_num
                     diff = calculateDistance(agents(i).pos, agents(j).pos, L);
                     dist = norm(diff);
-                    escape_direction = escape_direction + diff / (dist^2);
+                    if dist <= vision_range
+                        escape_direction = escape_direction + diff / (dist^2);
+                    end
                 end
                 
                 % 添加墙壁斥力
@@ -277,7 +308,7 @@ while 1
                 end
             end
         end
-        
+ 
         % 判断是否触发被捕获
         for i = (pursuers_num+1):agents_sum
             if agents(i).active
@@ -311,33 +342,44 @@ function pos = checkBounds(pos, L)
     pos(2) = max(0, min(pos(2), L));
 end
 
-% 计算两点之间的最短距离（考虑边界）
-function diff = calculateDistance(pos1, pos2, L)
-    diff = pos1 - pos2;
-    diff = diff - L * round(diff / L);
+% 修改 clearFog 函数
+function fog_grid = clearFog(pos, vision_range, fog_grid, fog_resolution, L)
+    [rows, cols] = size(fog_grid);
+    for i = 1:rows
+        for j = 1:cols
+            cell_pos = [(j-1)*fog_resolution, (i-1)*fog_resolution];
+            dist = norm(calculateDistance(cell_pos, pos, L));
+            if dist <= vision_range
+                fog_grid(i, j) = 0;  % 0 表示已探索（黑色）
+            end
+        end
+    end
 end
 
-% 计算墙壁斥力
+function diff = calculateDistance(pos1, pos2, L)
+    diff = pos1 - pos2;
+    diff = diff - L * round(diff / L);  % 周期性边界条件
+end
+
 function F_wall = calculateWallRepulsion(pos, L, k_wall, wall_range)
     F_wall = [0, 0];
     
+    % 检查并计算四面墙的排斥力
     % 左墙
     if pos(1) < wall_range
         F_wall(1) = F_wall(1) + k_wall * (1/pos(1) - 1/wall_range) * (1/pos(1)^2);
     end
-    
     % 右墙
     if L - pos(1) < wall_range
         F_wall(1) = F_wall(1) - k_wall * (1/(L-pos(1)) - 1/wall_range) * (1/(L-pos(1))^2);
     end
-    
     % 下墙
     if pos(2) < wall_range
         F_wall(2) = F_wall(2) + k_wall * (1/pos(2) - 1/wall_range) * (1/pos(2)^2);
     end
-    
     % 上墙
     if L - pos(2) < wall_range
         F_wall(2) = F_wall(2) - k_wall * (1/(L-pos(2)) - 1/wall_range) * (1/(L-pos(2))^2);
     end
 end
+
