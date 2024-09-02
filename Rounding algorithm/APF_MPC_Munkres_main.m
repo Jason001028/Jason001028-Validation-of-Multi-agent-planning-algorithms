@@ -12,7 +12,24 @@ L = 10; % 边长为L的正方形
 square_x = [0 0 L L 0]; % 5个顶点的坐标,第一个和最后一个重合才能形成封闭图形
 square_y = [0 L L 0 0];
 % 最大速度
-max_speed = 2.5; % 设置最大速度
+max_speed = 3; % 设置最大速度
+
+% 障碍物生成
+n = 10; % 障碍物数量
+obstacles = zeros(n, 2);
+for i = 1:n
+    obstacles(i,1) = unidrnd(L);
+    obstacles(i,2) = unidrnd(L);
+end
+
+% 动态障碍物生成
+n = 5; % 障碍物数量
+obstacles_dyn = zeros(n, 2);
+for i = 1:n
+    obstacles_dyn(i,1) = unidrnd(L);
+    obstacles_dyn(i,2) = unidrnd(L);
+end
+
 % 初始化智能体参数
 for i = 1:agents_sum
     agents(i).pos = rand(1,2)*L;
@@ -27,6 +44,8 @@ k_rep = 0.5; % 排斥力系数
 rep_range = 0.015; % 排斥力作用范围
 k_wall = 0.5; % 墙壁斥力系数
 wall_range = 0.1; % 墙壁斥力作用范围
+k_obs = 10; % 障碍物斥力系数
+obs_range = 0.3; % 障碍物斥力作用范围
 
 % 新参数
 cooperation_range = 0.3; % 协作范围
@@ -105,7 +124,10 @@ while 1
         
         plot(temp_pos(1:pursuers_num,1), temp_pos(1:pursuers_num,2), 'go', ...
              temp_pos(pursuers_num+1:end,1), temp_pos(pursuers_num+1:end,2), 'r*', ...
-             virtual_points(:,1), virtual_points(:,2), 'b.');
+             virtual_points(:,1), virtual_points(:,2), 'b.', ...
+             obstacles(:,1), obstacles(:,2), 'ks', 'MarkerSize', 10, 'MarkerFaceColor', 'k');
+        %     obstacles_dyn(:,1), obstacles_dyn(:,2), 'ks', 'MarkerSize', 10, 'MarkerFaceColor', 'k');
+
         
         % 打label
         plabels = arrayfun(@(n) {sprintf('X%d', n)}, (1:agents_sum)');
@@ -116,19 +138,19 @@ while 1
         xlim([0 L]);
         ylim([0 L]);
 
-        % 追捕者的 MPC 控制
-        max_speed_pursuer = 1.2; % 略微增加最大速度
-        for i = 1:pursuers_num
-            assigned_point_index = find(assignments(i, :));
-            if ~isempty(assigned_point_index)
-                target_point = virtual_points(assigned_point_index, :);
-            else
-                % 如果没有分配到虚拟质点，直接追踪最近的逃避者
-                evader_positions = [agents(pursuers_num+1:end).pos];
-                distances = vecnorm(agents(i).pos - evader_positions, 2, 2);
-                [~, nearest_evader] = min(distances);
-                target_point = agents(pursuers_num + nearest_evader).pos;
-            end
+    % 追捕者的 MPC 控制
+    max_speed_pursuer = 1.2; % 略微增加最大速度
+    for i = 1:pursuers_num
+        assigned_point_index = find(assignments(i, :));
+        if ~isempty(assigned_point_index)
+            target_point = virtual_points(assigned_point_index, :);
+        else
+            % 如果没有分配到虚拟质点，直接追踪最近的逃避者
+            evader_positions = [agents(pursuers_num+1:end).pos];
+            distances = vecnorm(agents(i).pos - evader_positions, 2, 2);
+            [~, nearest_evader] = min(distances);
+            target_point = agents(pursuers_num + nearest_evader).pos;
+        end
             
             % 计算人工势场力
             F_rep = [0, 0];
@@ -142,9 +164,18 @@ while 1
                 end
             end
             
+            % 添加障碍物斥力
+            for j = 1:n
+                diff = calculateDistance(agents(i).pos, obstacles(j,:), L);
+                dist = norm(diff);
+                if dist < obs_range
+                    F_rep = F_rep + k_obs * (1/dist - 1/obs_range) * (1/dist^2) * (diff / dist);
+                end
+            end
+            
             % 结合MPC和APF
             [optimal_control, predicted_trajectory] = mpcControlWithAPF(agents(i).pos, target_point, F_rep, prediction_horizon, control_horizon, Q, R, max_speed_pursuer);
-            
+              
             % 保存旧位置
             old_pos = agents(i).pos;
             
@@ -171,7 +202,7 @@ while 1
                 dist_to_target = norm(agents(i).target - agents(i).pos);
                 
                 % 如果接近目标点，选择新的目标点
-                if dist_to_target < 0.5
+                if dist_to_target < 0.2
                     agents(i).target = rand(1, 2) * L;
                     agents(i).direction = (agents(i).target - agents(i).pos) / norm(agents(i).target - agents(i).pos);
                 end
@@ -181,7 +212,7 @@ while 1
                 
                 % 更新方向，考虑当前方向、目标方向和墙壁斥力
                 target_direction = (agents(i).target - agents(i).pos) / norm(agents(i).target - agents(i).pos);
-                new_direction = 0.7 * agents(i).direction + 0.2 * target_direction + 0.1 * F_wall;
+                new_direction = 0.6 * agents(i).direction + 0.3 * target_direction + 0.1 * F_wall;
                 new_direction = new_direction / norm(new_direction);
                 
                 % 平滑过渡到新方向
@@ -318,7 +349,7 @@ function [optimal_control, predicted_trajectory] = mpcControlWithAPF(current_pos
         optimal_direction = [0, 0];
     end
     
-    % 结合APF力
+    % 结合APF力和障碍物
     combined_direction = optimal_direction + F_rep;
     if norm(combined_direction) > 0
         combined_direction = combined_direction / norm(combined_direction);
