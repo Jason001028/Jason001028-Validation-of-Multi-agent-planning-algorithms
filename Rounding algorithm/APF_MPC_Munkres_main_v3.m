@@ -9,7 +9,8 @@ pursuers_num = 5;
 evaders_num = 1;
 agents_sum = pursuers_num + evaders_num;
 t_step = 0.01;
-capture_dis = 0.2;
+%虚拟质点被占领距离阈值
+capture_dis = 0.25;
 counter = 0;
 L = 10; % 边长为L的正方形
 
@@ -23,7 +24,8 @@ max_speed = 2.8; % 最大速度
 % 人工势场参数
 rep_range = 2;
 k_rep = 1;
-obs_range = 1;
+%障碍物斥力生效范围
+obs_range = 0.75;
 k_obs = 2;
 
 vehicles = cell(1, pursuers_num);
@@ -38,10 +40,10 @@ for i = 1:pursuers_num
 end
 
 % 逃逸目标参数
-evader_speed = 0.5; % 逃逸目标的低速运动速度
+evader_speed = 0.35; % 逃逸目标的低速运动速度
 num_evader_virtual_points = pursuers_num; % 逃逸目标周围的虚拟质点数量
-evader_virtual_point_radius = 1; % 逃逸目标虚拟质点的分布半径
-evader_virtual_point_speed = 0.85; % 逃逸目标虚拟质点的旋转速度
+evader_virtual_point_radius = 1.5; % 逃逸目标虚拟质点的分布半径
+evader_virtual_point_speed = 0.75; % 逃逸目标虚拟质点的旋转速度
 esa_flag = 0;%代表是逃逸者
 dy_flag = 1;%代表是动态障碍物
 % 初始化动态障碍物
@@ -206,7 +208,7 @@ while 1
             F_rep = calculateRepulsiveForce(vehicles, i, obstacles, n, rep_range, k_rep, obs_range, k_obs,n_dy,obstacles_dy);
             
             % 结合MPC和APF
-            [optimal_control, predicted_trajectory] = simplifiedControlWithAPF(vehicles{i}, target_point, F_rep, max_speed, L,evader_pos,evader_virtual_point_speed);
+            [optimal_control, predicted_trajectory] = ModulePredictControlWithAPF(vehicles{i}, target_point, F_rep, max_speed, L,evader_pos,evader_virtual_point_speed);
         
             % 更新 vehicle 状态
             vehicles{i} = updateVehicle(vehicles{i}, optimal_control, t_step, L);
@@ -226,7 +228,21 @@ while 1
             end
         end
 
+        % 计算被占领的虚拟质点数目
+        occupied_points = 0;
+        for j = 1:num_evader_virtual_points
+            for k = 1:pursuers_num
+                if norm(vehicles{k}.position - evader_virtual_points(j, :)) < capture_dis
+                    occupied_points = occupied_points + 1;
+                    break;
+                end
+            end
+        end
 
+        % 在右上角显示被占领的虚拟质点数目
+        text_pos = [L*0.25, L*0.05]; % 文本位置
+        text_str = sprintf('Occupied: %d/%d', occupied_points, num_evader_virtual_points);
+        text(text_pos(1), text_pos(2), text_str, 'FontSize', 12, 'FontWeight', 'bold', 'HorizontalAlignment', 'right');
         
         hold off
         counter = counter + 1;
@@ -297,13 +313,13 @@ function F_rep = calculateRepulsiveForce(vehicles, current_index, obstacles, n, 
 
 end
 
-
-function [optimal_control, predicted_trajectory] = simplifiedControlWithAPF(vehicle, target_point, F_rep, max_speed, L, evader_pos, evader_virtual_point_speed)
+%%%%%%%%%%%%%%%%%%%%%%%%%                 MPC+APF,关键代码                 %%%%%%%%%%%%%%%%%%%%%%%%%%%
+function [optimal_control, predicted_trajectory] = ModulePredictControlWithAPF(vehicle, target_point, F_rep, max_speed, L, evader_pos, evader_virtual_point_speed)
     dt = 0.1; % 时间步长
-    Kp = 2; % 比例增益
+    Kp = 3; % 比例增益
     
     % 预测虚拟质点的未来位置
-    future_time = 0.5; % 预测半秒后的位置
+    future_time = 0.3; % 预测0.3秒后的位置
     predicted_target = predictVirtualPointPosition(target_point, evader_pos, evader_virtual_point_speed, future_time);
 
     % 计算期望速度
@@ -463,7 +479,7 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
         escape_direction = escape_direction + 5*center_force;
     else
         center_force = to_center / center_distance^2;
-        escape_direction = escape_direction + 0.01*center_force;
+        escape_direction = escape_direction + 0.15*center_force;
     end
     
     % 添加切向力以鼓励循环运动
@@ -473,7 +489,7 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
     
     % 添加远离墙壁的力
     wall_force = [0, 0];
-    wall_range = 0.3; % 墙壁影响范围
+    wall_range = 0.15; % 墙壁影响范围
     if evader_pos(1) < wall_range
         wall_force(1) = wall_range - evader_pos(1);
     elseif evader_pos(1) > L - wall_range

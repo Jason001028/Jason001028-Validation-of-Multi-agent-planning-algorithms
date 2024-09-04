@@ -38,14 +38,16 @@ for i = 1:pursuers_num
 end
 
 % 逃逸目标参数
-evader_speed = 0.5; % 逃逸目标的低速运动速度
+evader_speed = 0.35; % 逃逸目标的低速运动速度
 num_evader_virtual_points = pursuers_num; % 逃逸目标周围的虚拟质点数量
-evader_virtual_point_radius = 1; % 逃逸目标虚拟质点的分布半径
-evader_virtual_point_speed = 0.85; % 逃逸目标虚拟质点的旋转速度
-
+evader_virtual_point_radius = 1.5; % 逃逸目标虚拟质点的分布半径
+evader_virtual_point_speed = 0.75; % 逃逸目标虚拟质点的旋转速度
+esa_flag = 0;%代表是逃逸者
+dy_flag = 1;%代表是动态障碍物
 % 初始化动态障碍物
 %动态障碍物数量,参考逃避者
-n_dy = 5;
+n_dy = 2;
+evader_speed_dy = 4  % 动态障碍物的中高速运动速度
 for i = 1:n_dy
     obstacles_dy(i).pos = rand(1,2)*L/2 + L/4;
     obstacles_dy(i).vel = [0 0];
@@ -114,7 +116,7 @@ while 1
                 % 计算动态障碍物的逃跑方向
                 pursuer_positions = cell2mat(cellfun(@(v) v.position, vehicles, 'UniformOutput', false));
                 pursuer_positions = reshape(pursuer_positions, [], 2);  % 确保是 Nx2 的矩阵
-                escape_direction = calculateEscapeDirection(obstacles_dy(i).pos, pursuer_positions, obstacles,L);
+                escape_direction = calculateEscapeDirection(obstacles_dy(i).pos, pursuer_positions, obstacles,L,dy_flag);
         
                 % 更新动态障碍物的方向、速度和位置
                 obstacles_dy(i).direction = escape_direction;
@@ -151,7 +153,7 @@ while 1
                 % 计算逃避者的逃跑方向
                 pursuer_positions = cell2mat(cellfun(@(v) v.position, vehicles, 'UniformOutput', false));
                 pursuer_positions = reshape(pursuer_positions, [], 2);  % 确保是 Nx2 的矩阵
-                escape_direction = calculateEscapeDirection(agents(i).pos, pursuer_positions, obstacles,L);
+                escape_direction = calculateEscapeDirection(agents(i).pos, pursuer_positions, obstacles,L,esa_flag);
         
                 % 更新逃避者的方向、速度和位置
                 agents(i).direction = escape_direction;
@@ -224,7 +226,21 @@ while 1
             end
         end
 
+        % 计算被占领的虚拟质点数目
+        occupied_points = 0;
+        for j = 1:num_evader_virtual_points
+            for k = 1:pursuers_num
+                if norm(vehicles{k}.position - evader_virtual_points(j, :)) < capture_dis
+                    occupied_points = occupied_points + 1;
+                    break;
+                end
+            end
+        end
 
+% 在右上角显示被占领的虚拟质点数目
+text_pos = [L*0.85, L*0.95]; % 文本位置
+text_str = sprintf('Occupied: %d/%d', occupied_points, num_evader_virtual_points);
+text(text_pos(1), text_pos(2), text_str, 'FontSize', 12, 'FontWeight', 'bold', 'HorizontalAlignment', 'right');
         
         hold off
         counter = counter + 1;
@@ -427,7 +443,7 @@ function checkVehicleCollisions(vehicles, current_index, obstacles)
 end
 
 
-function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positions, obstacles, L)
+function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positions, obstacles, L,flag)
     % 计算逃离方向
     escape_direction = [0, 0];
     
@@ -450,12 +466,19 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
         end
     end
     
-    % 添加向地图中心的吸引力
+    %考虑地图中心对逃避方向影响
     center = [L/2, L/2];
     to_center = center - evader_pos;
     center_distance = norm(to_center);
-    center_force = to_center / center_distance^2;
-    escape_direction = escape_direction + 5*center_force;
+
+    % 仅对逃避者添加大量的向地图中心的吸引力
+    if flag == 0
+        center_force = to_center / center_distance^2;
+        escape_direction = escape_direction + 5*center_force;
+    else
+        center_force = to_center / center_distance^2;
+        escape_direction = escape_direction + 0.01*center_force;
+    end
     
     % 添加切向力以鼓励循环运动
     tangential_force = [-to_center(2), to_center(1)];
@@ -464,7 +487,7 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
     
     % 添加远离墙壁的力
     wall_force = [0, 0];
-    wall_range = 1; % 墙壁影响范围
+    wall_range = 0.3; % 墙壁影响范围
     if evader_pos(1) < wall_range
         wall_force(1) = wall_range - evader_pos(1);
     elseif evader_pos(1) > L - wall_range
