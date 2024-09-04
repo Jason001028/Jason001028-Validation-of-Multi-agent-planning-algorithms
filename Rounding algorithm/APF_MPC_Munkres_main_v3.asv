@@ -9,16 +9,16 @@ pursuers_num = 5;
 evaders_num = 1;
 agents_sum = pursuers_num + evaders_num;
 t_step = 0.01;
-capture_dis = 0.05;
+capture_dis = 0.2;
 counter = 0;
 L = 10; % 边长为L的正方形
 
 % MPC 参数
 prediction_horizon = 10;
 control_horizon = 5;
-Q = diag([1, 1]); % 状态权重矩阵
+Q = diag([2, 1]); % 状态权重矩阵
 R = diag([0.1, 0.1]); % 控制权重矩阵
-max_speed = 2.5; % 最大速度
+max_speed = 2.8; % 最大速度
 
 % 人工势场参数
 rep_range = 2;
@@ -41,7 +41,18 @@ end
 evader_speed = 0.5; % 逃逸目标的低速运动速度
 num_evader_virtual_points = pursuers_num; % 逃逸目标周围的虚拟质点数量
 evader_virtual_point_radius = 1; % 逃逸目标虚拟质点的分布半径
-evader_virtual_point_speed = 0.5; % 逃逸目标虚拟质点的旋转速度
+evader_virtual_point_speed = 0.85; % 逃逸目标虚拟质点的旋转速度
+
+% 初始化动态障碍物
+%动态障碍物数量,参考逃避者
+n_dy = 5;
+for i = 1:n_dy
+    obstacles_dy(i).pos = rand(1,2)*L/2 + L/4;
+    obstacles_dy(i).vel = [0 0];
+    obstacles_dy(i).acc = [0 0];
+    obstacles_dy(i).direction = rand(1,2);
+    obstacles_dy(i).direction = obstacles_dy(i).direction / norm(obstacles_dy(i).direction); % 归一化方向向量
+end
 
 
 % 初始化逃避者
@@ -67,7 +78,7 @@ F = {};%改为cell数组
 figure()
 while 1
     if sum([agents(pursuers_num+1:agents_sum).active]) == 0
-        disp('All evaders captured!')
+        disp('Mission Acomplished!')
         break
     else
 
@@ -79,6 +90,7 @@ while 1
         evader_direction = agents(pursuers_num+1).direction;
         new_evader_pos = evader_pos + evader_speed * evader_direction * t_step;
         agents(pursuers_num+1).pos = checkBounds(new_evader_pos, L);
+
 
         % 更新逃逸目标周围的虚拟质点
         evader_virtual_points = updateEvaderVirtualPoints(evader_pos, num_evader_virtual_points, evader_virtual_point_radius, evader_virtual_point_speed, counter * t_step);
@@ -97,6 +109,23 @@ while 1
         % 绘制障碍物
         plot(obstacles(:,1),obstacles(:,2),'ks','MarkerSize',10,'MarkerFaceColor','k')
         
+        % 更新动态障碍物
+        for i = 1:n_dy
+                % 计算动态障碍物的逃跑方向
+                pursuer_positions = cell2mat(cellfun(@(v) v.position, vehicles, 'UniformOutput', false));
+                pursuer_positions = reshape(pursuer_positions, [], 2);  % 确保是 Nx2 的矩阵
+                escape_direction = calculateEscapeDirection(obstacles_dy(i).pos, pursuer_positions, obstacles,L);
+        
+                % 更新动态障碍物的方向、速度和位置
+                obstacles_dy(i).direction = escape_direction;
+                obstacles_dy(i).vel = obstacles_dy(i).direction * evader_speed_dy;
+                obstacles_dy(i).pos = obstacles_dy(i).pos + obstacles_dy(i).vel * t_step;
+                obstacles_dy(i).pos = checkBounds(obstacles_dy(i).pos, L);
+                % 绘制动态障碍物
+                plot(obstacles_dy(i).pos(1),obstacles_dy(i).pos(2),'o','MarkerSize',10,'MarkerFaceColor',[0.7 0.7 0.7],'MarkerEdgeColor',[0.5 0.5 0.5])
+        end
+        
+
         % 设置图形属性
         axis([0 L 0 L])
         title(['Time: ',num2str(counter*t_step,'%.2f'),'s'])
@@ -172,10 +201,10 @@ while 1
             end
             
             % 计算人工势场力
-            F_rep = calculateRepulsiveForce(vehicles, i, obstacles, n, rep_range, k_rep, obs_range, k_obs);
+            F_rep = calculateRepulsiveForce(vehicles, i, obstacles, n, rep_range, k_rep, obs_range, k_obs,n_dy,obstacles_dy);
             
             % 结合MPC和APF
-            [optimal_control, predicted_trajectory] = simplifiedControlWithAPF(vehicles{i}, target_point, F_rep, max_speed, L);
+            [optimal_control, predicted_trajectory] = simplifiedControlWithAPF(vehicles{i}, target_point, F_rep, max_speed, L,evader_pos,evader_virtual_point_speed);
         
             % 更新 vehicle 状态
             vehicles{i} = updateVehicle(vehicles{i}, optimal_control, t_step, L);
@@ -231,7 +260,7 @@ function corners = calculateVehicleCorners(vehicle)
     corners = (corners * R) + repmat(vehicle.position, 4, 1);
 end
 
-function F_rep = calculateRepulsiveForce(vehicles, current_index, obstacles, n, rep_range, k_rep, obs_range, k_obs)
+function F_rep = calculateRepulsiveForce(vehicles, current_index, obstacles, n, rep_range, k_rep, obs_range, k_obs,n_dy,obstacles_dy)
     F_rep = [0, 0];
     current_pos = vehicles{current_index}.position;
     
@@ -252,15 +281,31 @@ function F_rep = calculateRepulsiveForce(vehicles, current_index, obstacles, n, 
             F_rep = F_rep + k_obs * (1/d - 1/obs_range) * (1/d^2) * (current_pos - obstacles(i,:)) / d;
         end
     end
+    
+    % 计算来自动态障碍物的斥力
+    for i = 1:n_dy
+        x=obstacles_dy(i).pos(1);
+        y=obstacles_dy(i).pos(2);
+        pos_dy=[x,y];
+        d = norm(current_pos - pos_dy);
+        if d < obs_range
+            F_rep = F_rep + k_obs * (1/d - 1/obs_range) * (1/d^2) * (current_pos - pos_dy) / d;
+        end
+    end
+
 end
 
 
-function [optimal_control, predicted_trajectory] = simplifiedControlWithAPF(vehicle, target_point, F_rep, max_speed, L)
+function [optimal_control, predicted_trajectory] = simplifiedControlWithAPF(vehicle, target_point, F_rep, max_speed, L, evader_pos, evader_virtual_point_speed)
     dt = 0.1; % 时间步长
-    Kp = 1; % 比例增益
+    Kp = 2; % 比例增益
     
+    % 预测虚拟质点的未来位置
+    future_time = 0.5; % 预测半秒后的位置
+    predicted_target = predictVirtualPointPosition(target_point, evader_pos, evader_virtual_point_speed, future_time);
+
     % 计算期望速度
-    desired_velocity = Kp * (target_point - vehicle.position);
+    desired_velocity = Kp * (predicted_target - vehicle.position);
     
     % 添加避免与目标碰撞的斥力
     safe_distance = 0.3; % 安全距离
@@ -396,7 +441,7 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
         escape_direction = escape_direction + diff / distance^2;
     end
     
-    % 远离障碍物
+    % 远离静态障碍物
     for i = 1:size(obstacles, 1)
         diff = evader_pos - obstacles(i, :);
         distance = norm(diff);
@@ -451,6 +496,13 @@ function virtual_points = updateEvaderVirtualPoints(center, num_points, radius, 
     x = cos(angles) * radius + center(1);
     y = sin(angles) * radius + center(2);
     virtual_points = [x; y]';
+end
+
+function predicted_point = predictVirtualPointPosition(current_point, center, speed, time)
+    current_angle = atan2(current_point(2) - center(2), current_point(1) - center(1));
+    future_angle = current_angle + speed * time;
+    radius = norm(current_point - center);
+    predicted_point = center + radius * [cos(future_angle), sin(future_angle)];
 end
 
 % 主程序结束

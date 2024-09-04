@@ -42,6 +42,19 @@ evader_speed = 0.5; % 逃逸目标的低速运动速度
 num_evader_virtual_points = pursuers_num; % 逃逸目标周围的虚拟质点数量
 evader_virtual_point_radius = 1; % 逃逸目标虚拟质点的分布半径
 evader_virtual_point_speed = 0.85; % 逃逸目标虚拟质点的旋转速度
+esa_flag = 0;%代表是逃逸者
+dy_flag = 1;%代表是动态障碍物
+% 初始化动态障碍物
+%动态障碍物数量,参考逃避者
+n_dy = 2;
+evader_speed_dy = 4  % 动态障碍物的中高速运动速度
+for i = 1:n_dy
+    obstacles_dy(i).pos = rand(1,2)*L/2 + L/4;
+    obstacles_dy(i).vel = [0 0];
+    obstacles_dy(i).acc = [0 0];
+    obstacles_dy(i).direction = rand(1,2);
+    obstacles_dy(i).direction = obstacles_dy(i).direction / norm(obstacles_dy(i).direction); % 归一化方向向量
+end
 
 
 % 初始化逃避者
@@ -80,6 +93,7 @@ while 1
         new_evader_pos = evader_pos + evader_speed * evader_direction * t_step;
         agents(pursuers_num+1).pos = checkBounds(new_evader_pos, L);
 
+
         % 更新逃逸目标周围的虚拟质点
         evader_virtual_points = updateEvaderVirtualPoints(evader_pos, num_evader_virtual_points, evader_virtual_point_radius, evader_virtual_point_speed, counter * t_step);
 
@@ -97,6 +111,23 @@ while 1
         % 绘制障碍物
         plot(obstacles(:,1),obstacles(:,2),'ks','MarkerSize',10,'MarkerFaceColor','k')
         
+        % 更新动态障碍物
+        for i = 1:n_dy
+                % 计算动态障碍物的逃跑方向
+                pursuer_positions = cell2mat(cellfun(@(v) v.position, vehicles, 'UniformOutput', false));
+                pursuer_positions = reshape(pursuer_positions, [], 2);  % 确保是 Nx2 的矩阵
+                escape_direction = calculateEscapeDirection(obstacles_dy(i).pos, pursuer_positions, obstacles,L,dy_flag);
+        
+                % 更新动态障碍物的方向、速度和位置
+                obstacles_dy(i).direction = escape_direction;
+                obstacles_dy(i).vel = obstacles_dy(i).direction * evader_speed_dy;
+                obstacles_dy(i).pos = obstacles_dy(i).pos + obstacles_dy(i).vel * t_step;
+                obstacles_dy(i).pos = checkBounds(obstacles_dy(i).pos, L);
+                % 绘制动态障碍物
+                plot(obstacles_dy(i).pos(1),obstacles_dy(i).pos(2),'o','MarkerSize',10,'MarkerFaceColor',[0.7 0.7 0.7],'MarkerEdgeColor',[0.5 0.5 0.5])
+        end
+        
+
         % 设置图形属性
         axis([0 L 0 L])
         title(['Time: ',num2str(counter*t_step,'%.2f'),'s'])
@@ -122,7 +153,7 @@ while 1
                 % 计算逃避者的逃跑方向
                 pursuer_positions = cell2mat(cellfun(@(v) v.position, vehicles, 'UniformOutput', false));
                 pursuer_positions = reshape(pursuer_positions, [], 2);  % 确保是 Nx2 的矩阵
-                escape_direction = calculateEscapeDirection(agents(i).pos, pursuer_positions, obstacles,L);
+                escape_direction = calculateEscapeDirection(agents(i).pos, pursuer_positions, obstacles,L,esa_flag);
         
                 % 更新逃避者的方向、速度和位置
                 agents(i).direction = escape_direction;
@@ -172,7 +203,7 @@ while 1
             end
             
             % 计算人工势场力
-            F_rep = calculateRepulsiveForce(vehicles, i, obstacles, n, rep_range, k_rep, obs_range, k_obs);
+            F_rep = calculateRepulsiveForce(vehicles, i, obstacles, n, rep_range, k_rep, obs_range, k_obs,n_dy,obstacles_dy);
             
             % 结合MPC和APF
             [optimal_control, predicted_trajectory] = simplifiedControlWithAPF(vehicles{i}, target_point, F_rep, max_speed, L,evader_pos,evader_virtual_point_speed);
@@ -231,7 +262,7 @@ function corners = calculateVehicleCorners(vehicle)
     corners = (corners * R) + repmat(vehicle.position, 4, 1);
 end
 
-function F_rep = calculateRepulsiveForce(vehicles, current_index, obstacles, n, rep_range, k_rep, obs_range, k_obs)
+function F_rep = calculateRepulsiveForce(vehicles, current_index, obstacles, n, rep_range, k_rep, obs_range, k_obs,n_dy,obstacles_dy)
     F_rep = [0, 0];
     current_pos = vehicles{current_index}.position;
     
@@ -252,6 +283,18 @@ function F_rep = calculateRepulsiveForce(vehicles, current_index, obstacles, n, 
             F_rep = F_rep + k_obs * (1/d - 1/obs_range) * (1/d^2) * (current_pos - obstacles(i,:)) / d;
         end
     end
+    
+    % 计算来自动态障碍物的斥力
+    for i = 1:n_dy
+        x=obstacles_dy(i).pos(1);
+        y=obstacles_dy(i).pos(2);
+        pos_dy=[x,y];
+        d = norm(current_pos - pos_dy);
+        if d < obs_range
+            F_rep = F_rep + k_obs * (1/d - 1/obs_range) * (1/d^2) * (current_pos - pos_dy) / d;
+        end
+    end
+
 end
 
 
@@ -386,7 +429,7 @@ function checkVehicleCollisions(vehicles, current_index, obstacles)
 end
 
 
-function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positions, obstacles, L)
+function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positions, obstacles, L,flag)
     % 计算逃离方向
     escape_direction = [0, 0];
     
@@ -400,7 +443,7 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
         escape_direction = escape_direction + diff / distance^2;
     end
     
-    % 远离障碍物
+    % 远离静态障碍物
     for i = 1:size(obstacles, 1)
         diff = evader_pos - obstacles(i, :);
         distance = norm(diff);
@@ -409,12 +452,19 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
         end
     end
     
-    % 添加向地图中心的吸引力
+    %考虑地图中心对逃避方向影响
     center = [L/2, L/2];
     to_center = center - evader_pos;
     center_distance = norm(to_center);
-    center_force = to_center / center_distance^2;
-    escape_direction = escape_direction + 5*center_force;
+
+    % 仅对逃避者添加大量的向地图中心的吸引力
+    if flag == 0
+        center_force = to_center / center_distance^2;
+        escape_direction = escape_direction + 5*center_force;
+    else
+        center_force = to_center / center_distance^2;
+        escape_direction = escape_direction + 0.01*center_force;
+    end
     
     % 添加切向力以鼓励循环运动
     tangential_force = [-to_center(2), to_center(1)];
@@ -423,7 +473,7 @@ function escape_direction = calculateEscapeDirection(evader_pos, pursuer_positio
     
     % 添加远离墙壁的力
     wall_force = [0, 0];
-    wall_range = 1; % 墙壁影响范围
+    wall_range = 0.3; % 墙壁影响范围
     if evader_pos(1) < wall_range
         wall_force(1) = wall_range - evader_pos(1);
     elseif evader_pos(1) > L - wall_range
